@@ -3,8 +3,8 @@ import random
 import colorsys
 import numpy as np
 import tensorflow as tf
-import pytesseract
 from core.config import cfg
+import os
 import re
 import uuid
 import json
@@ -14,12 +14,9 @@ import platform
 from PIL import ImageFont, ImageDraw, Image
 import access_key
 
-# If you don't have tesseract executable in your PATH, include the following:
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract'
-# Example tesseract_cmd = r'C:\Program Files (x86)\Tesseract-OCR\tesseract'
-
 api_url = access_key.api_url
 secret_key = access_key.secret_key
+
 
 def put_text(image, text, x, y, color=(0, 255, 0), font_size=22):
     if type(image) == np.ndarray:
@@ -42,6 +39,7 @@ def put_text(image, text, x, y, color=(0, 255, 0), font_size=22):
 
     return opencv_image
 
+
 def recognize_plate_with_clover(path, img):
     files = [('file', open(path, 'rb'))]
 
@@ -62,8 +60,6 @@ def recognize_plate_with_clover(path, img):
     response = requests.request("POST", api_url, headers=headers, data=payload, files=files)
     result = response.json()
 
-    #img = cv2.imread(path)
-    roi_img = img.copy()
     image_h, image_w, _ = img.shape
 
     plate_number = ""
@@ -75,86 +71,9 @@ def recognize_plate_with_clover(path, img):
     if plate_number != None:
         plate_number = re.sub('[^0-9가-힣]', '', plate_number)
         print("License Plate #: ", plate_number)
-        #roi_img = put_text(roi_img, plate_number, 0, image_h - 50, font_size=30)
-        #cv2.imwrite('./detections/crop/cars/' + plate_number + '.png', roi_img)
-        #cv2.imshow("ROI", roi_img)
-        #cv2.waitKey(0)
 
     return plate_number
 
-# function to recognize license plate numbers using Tesseract OCR
-def recognize_plate(img, coords):
-    # separate coordinates from box
-    xmin, ymin, xmax, ymax = coords
-    # get the subimage that makes up the bounded region and take an additional 5 pixels on each side
-    box = img[int(ymin)-5:int(ymax)+5, int(xmin)-5:int(xmax)+5]
-    # grayscale region within bounding box
-    gray = cv2.cvtColor(box, cv2.COLOR_RGB2GRAY)
-    # resize image to three times as large as original for better readability
-    gray = cv2.resize(gray, None, fx = 3, fy = 3, interpolation = cv2.INTER_CUBIC)
-    # perform gaussian blur to smoothen image
-    blur = cv2.GaussianBlur(gray, (5,5), 0)
-    #cv2.imshow("Gray", gray)
-    #cv2.waitKey(0)
-    # threshold the image using Otsus method to preprocess for tesseract
-    ret, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
-    #cv2.imshow("Otsu Threshold", thresh)
-    #cv2.waitKey(0)
-    # create rectangular kernel for dilation
-    rect_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
-    # apply dilation to make regions more clear
-    dilation = cv2.dilate(thresh, rect_kern, iterations = 1)
-    #cv2.imshow("Dilation", dilation)
-    #cv2.waitKey(0)
-    # find contours of regions of interest within license plate
-    try:
-        contours, hierarchy = cv2.findContours(dilation, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    except:
-        ret_img, contours, hierarchy = cv2.findContours(dilation, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    # sort contours left-to-right
-    sorted_contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[0])
-    # create copy of gray image
-    im2 = gray.copy()
-    # create blank string to hold license plate number
-    plate_num = ""
-    # loop through contours and find individual letters and numbers in license plate
-    for cnt in sorted_contours:
-        x,y,w,h = cv2.boundingRect(cnt)
-        height, width = im2.shape
-        # if height of box is not tall enough relative to total height then skip
-        if height / float(h) > 6: continue
-
-        ratio = h / float(w)
-        # if height to width ratio is less than 1.5 skip
-        if ratio < 1.5: continue
-
-        # if width is not wide enough relative to total width then skip
-        if width / float(w) > 15: continue
-
-        area = h * w
-        # if area is less than 100 pixels skip
-        if area < 100: continue
-
-        # draw the rectangle
-        rect = cv2.rectangle(im2, (x,y), (x+w, y+h), (0,255,0),2)
-        # grab character region of image
-        roi = thresh[y-5:y+h+5, x-5:x+w+5]
-        # perfrom bitwise not to flip image to black text on white background
-        roi = cv2.bitwise_not(roi)
-        # perform another blur on character region
-        roi = cv2.medianBlur(roi, 5)
-        try:
-            text = pytesseract.image_to_string(roi, config='-c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ --psm 8 --oem 3')
-            # clean tesseract text by removing any unwanted blank spaces
-            clean_text = re.sub('[\W_]+', '', text)
-            plate_num += clean_text
-        except: 
-            text = None
-    if plate_num != None:
-        print("License Plate #: ", plate_num)
-    #cv2.imshow("Character's Segmented", im2)
-    #cv2.waitKey(0)
-    return plate_num
 
 def load_freeze_layer(model='yolov4', tiny=False):
     if tiny:
@@ -168,6 +87,7 @@ def load_freeze_layer(model='yolov4', tiny=False):
         else:
             freeze_layouts = ['conv2d_93', 'conv2d_101', 'conv2d_109']
     return freeze_layouts
+
 
 def load_weights(model, weights_file, model_name='yolov4', is_tiny=False):
     if is_tiny:
@@ -189,8 +109,8 @@ def load_weights(model, weights_file, model_name='yolov4', is_tiny=False):
 
     j = 0
     for i in range(layer_size):
-        conv_layer_name = 'conv2d_%d' %i if i > 0 else 'conv2d'
-        bn_layer_name = 'batch_normalization_%d' %j if j > 0 else 'batch_normalization'
+        conv_layer_name = 'conv2d_%d' % i if i > 0 else 'conv2d'
+        bn_layer_name = 'batch_normalization_%d' % j if j > 0 else 'batch_normalization'
 
         conv_layer = model.get_layer(conv_layer_name)
         filters = conv_layer.filters
@@ -230,6 +150,7 @@ def read_class_names(class_file_name):
             names[ID] = name.strip('\n')
     return names
 
+
 def load_config(FLAGS):
     if FLAGS.tiny:
         STRIDES = np.array(cfg.YOLO.STRIDES_TINY)
@@ -246,6 +167,7 @@ def load_config(FLAGS):
 
     return STRIDES, ANCHORS, NUM_CLASS, XYSCALE
 
+
 def get_anchors(anchors_path, tiny=False):
     anchors = np.array(anchors_path)
     if tiny:
@@ -253,17 +175,18 @@ def get_anchors(anchors_path, tiny=False):
     else:
         return anchors.reshape(3, 3, 2)
 
-def image_preprocess(image, target_size, gt_boxes=None):
-    ih, iw    = target_size
-    h,  w, _  = image.shape
 
-    scale = min(iw/w, ih/h)
-    nw, nh  = int(scale * w), int(scale * h)
+def image_preprocess(image, target_size, gt_boxes=None):
+    ih, iw = target_size
+    h, w, _ = image.shape
+
+    scale = min(iw / w, ih / h)
+    nw, nh = int(scale * w), int(scale * h)
     image_resized = cv2.resize(image, (nw, nh))
 
     image_paded = np.full(shape=[ih, iw, 3], fill_value=128.0)
-    dw, dh = (iw - nw) // 2, (ih-nh) // 2
-    image_paded[dh:nh+dh, dw:nw+dw, :] = image_resized
+    dw, dh = (iw - nw) // 2, (ih - nh) // 2
+    image_paded[dh:nh + dh, dw:nw + dw, :] = image_resized
     image_paded = image_paded / 255.
 
     if gt_boxes is None:
@@ -273,6 +196,7 @@ def image_preprocess(image, target_size, gt_boxes=None):
         gt_boxes[:, [0, 2]] = gt_boxes[:, [0, 2]] * scale + dw
         gt_boxes[:, [1, 3]] = gt_boxes[:, [1, 3]] * scale + dh
         return image_paded, gt_boxes
+
 
 # helper function to convert bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, xmax, ymax
 def format_boxes(bboxes, image_height, image_width):
@@ -284,7 +208,10 @@ def format_boxes(bboxes, image_height, image_width):
         box[0], box[1], box[2], box[3] = xmin, ymin, xmax, ymax
     return bboxes
 
-def draw_bbox(image, bboxes, img_path, cropped_img, info = False, counted_classes = None, show_label=True, allowed_classes=list(read_class_names(cfg.YOLO.CLASSES).values()), read_plate = True):
+
+def draw_bbox(image, bboxes, plate_file, plate_list, path='./detections/crop/cars/', img_num=0, info=False,
+              counted_classes=None, show_label=True, allowed_classes=list(read_class_names(cfg.YOLO.CLASSES).values()),
+              read_plate=True):
     classes = read_class_names(cfg.YOLO.CLASSES)
     num_classes = len(classes)
     image_h, image_w, _ = image.shape
@@ -297,50 +224,54 @@ def draw_bbox(image, bboxes, img_path, cropped_img, info = False, counted_classe
     random.seed(None)
 
     out_boxes, out_scores, out_classes, num_boxes = bboxes
+    counts = dict()
+
     for i in range(num_boxes):
-        if int(out_classes[i]) < 0 or int(out_classes[i]) > num_classes: continue
         coor = out_boxes[i]
-        fontScale = 0.5
-        score = out_scores[i]
-        class_ind = int(out_classes[i])
-        class_name = classes[class_ind]
-        if class_name not in allowed_classes:
-            continue
+        # get count of class for part of image name
+        class_index = int(out_classes[i])
+        class_name = classes[class_index]
+        if class_name in allowed_classes:
+            counts[class_name] = counts.get(class_name, 0) + 1
+            # get box coords
+            xmin, ymin, xmax, ymax = out_boxes[i]
+            # crop detection from image (take an additional 5 pixels around all edges)
+            cropped_img = image[int(ymin) - 5:int(ymax) + 5, int(xmin) - 5:int(xmax) + 5]
+            crop_h, crop_w, _ = cropped_img.shape
+
+            if (crop_h > 100) & (crop_w > 250):
+                if (crop_w / crop_h) > 2.5:
+                    # construct image name and join it to path for saving crop properly
+                    img_name = class_name + '_' + str(img_num) + '.png'
+                    img_path = os.path.join(path, img_name)
+                    # save image
+                    cv2.imwrite(img_path, cropped_img)
+                    img_num += 1
+                    plate_number = recognize_plate_with_clover(img_path, cropped_img)
+                    cnt = plate_list.count(plate_number)
+                    if cnt == 0:
+                        if plate_number != None:
+                            image = put_text(image, plate_number, int(coor[0]), int(coor[1] - 40), font_size=30)
+                            plate_list.append(plate_number)
+                            plate_file.write(plate_number + '\n')
+
+                        bbox_color = colors[class_index]
+                        bbox_thick = int(0.6 * (image_h + image_w) / 600)
+                        c1, c2 = (coor[0], coor[1]), (coor[2], coor[3])
+                        cv2.rectangle(image, c1, c2, bbox_color, bbox_thick)
+                    else:
+                        os.remove(img_path)
+                        img_num -= 1
+                        continue
+                else:
+                    continue
+            else:
+                continue
         else:
-            if read_plate:
-                height_ratio = int(image_h / 25)
-                plate_number = recognize_plate_with_clover(img_path, cropped_img)
-                if plate_number != None:
-                    image = put_text(image, plate_number, int(coor[0]), int(coor[1]-40), font_size=30)
+            continue
 
-            bbox_color = colors[class_ind]
-            bbox_thick = int(0.6 * (image_h + image_w) / 600)
-            c1, c2 = (coor[0], coor[1]), (coor[2], coor[3])
-            cv2.rectangle(image, c1, c2, bbox_color, bbox_thick)
+    return image, img_num, plate_list
 
-            '''
-            if info:
-                print("Object found: {}, Confidence: {:.2f}, BBox Coords (xmin, ymin, xmax, ymax): {}, {}, {}, {} ".format(class_name, score, coor[0], coor[1], coor[2], coor[3]))
-
-            if show_label:
-                bbox_mess = '%s: %.2f' % (class_name, score)
-                t_size = cv2.getTextSize(bbox_mess, 0, fontScale, thickness=bbox_thick // 2)[0]
-                c3 = (c1[0] + t_size[0], c1[1] - t_size[1] - 3)
-                cv2.rectangle(image, c1, (np.float32(c3[0]), np.float32(c3[1])), bbox_color, -1) #filled
-
-                cv2.putText(image, bbox_mess, (c1[0], np.float32(c1[1] - 2)), cv2.FONT_HERSHEY_SIMPLEX,
-                        fontScale, (0, 0, 0), bbox_thick // 2, lineType=cv2.LINE_AA)
-
-            if counted_classes != None:
-                height_ratio = int(image_h / 25)
-                offset = 15
-                for key, value in counted_classes.items():
-                    cv2.putText(image, "{}s detected: {}".format(key, value), (5, offset),
-                            cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 255, 0), 2)
-                    offset += height_ratio
-                    
-            '''
-    return image
 
 def bbox_iou(bboxes1, bboxes2):
     """
@@ -487,23 +418,24 @@ def bbox_ciou(bboxes1, bboxes2):
     diou = iou - tf.math.divide_no_nan(rho_2, c_2)
 
     v = (
-        (
-            tf.math.atan(
-                tf.math.divide_no_nan(bboxes1[..., 2], bboxes1[..., 3])
-            )
-            - tf.math.atan(
-                tf.math.divide_no_nan(bboxes2[..., 2], bboxes2[..., 3])
-            )
-        )
-        * 2
-        / np.pi
-    ) ** 2
+                (
+                        tf.math.atan(
+                            tf.math.divide_no_nan(bboxes1[..., 2], bboxes1[..., 3])
+                        )
+                        - tf.math.atan(
+                    tf.math.divide_no_nan(bboxes2[..., 2], bboxes2[..., 3])
+                )
+                )
+                * 2
+                / np.pi
+        ) ** 2
 
     alpha = tf.math.divide_no_nan(v, 1 - iou + v)
 
     ciou = diou - alpha * v
 
     return ciou
+
 
 def nms(bboxes, iou_threshold, sigma=0.3, method='nms'):
     """
@@ -542,14 +474,16 @@ def nms(bboxes, iou_threshold, sigma=0.3, method='nms'):
 
     return best_bboxes
 
+
 def freeze_all(model, frozen=True):
     model.trainable = not frozen
     if isinstance(model, tf.keras.Model):
         for l in model.layers:
             freeze_all(l, frozen)
+
+
 def unfreeze_all(model, frozen=False):
     model.trainable = not frozen
     if isinstance(model, tf.keras.Model):
         for l in model.layers:
             unfreeze_all(l, frozen)
-
